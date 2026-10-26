@@ -1,0 +1,258 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AWS Serverless Media Transcoder and Thumbnail Pipeline - Complete Infrastructure Stack.
+  Deploys S3 Input/Output buckets, DynamoDB table, CloudFront with Origin Access Control (OAC),
+  S3 bucket policies, and IAM Execution Role with least privilege.
+
+Parameters:
+  ProjectPrefix:
+    Type: String
+    Default: media-hub
+    Description: Unique prefix for naming AWS resources (lowercase letters, numbers, hyphens).
+    AllowedPattern: '^[a-z0-9-]+$'
+
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage/environment.
+
+  UseExistingLabRole:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Set to 'true' if deploying in AWS Academy Learner Lab with predefined LabRole.
+
+Conditions:
+  CreateNewIamRole: !Equals [!Ref UseExistingLabRole, 'false']
+
+Resources:
+  # ============================================================================
+  # 1. S3 STORAGE LAYER
+  # ============================================================================
+
+  # Raw Upload Input Bucket
+  InputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectPrefix}-input-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - Id: AllowDirectWebUploads
+            AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - HEAD
+            AllowedHeaders:
+              - '*'
+            ExposeHeaders:
+              - ETag
+              - x-amz-server-side-encryption
+              - x-amz-request-id
+              - x-amz-id-2
+            MaxAge: 3000
+
+  # Optimized Deliverables Output Bucket
+  OutputBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${ProjectPrefix}-output-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # ============================================================================
+  # 2. DYNAMODB METADATA STORE
+  # ============================================================================
+
+  MediaMetadataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: MediaMetadata
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: mediaId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: mediaId
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectPrefix
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ============================================================================
+  # 3. IAM ROLES & POLICIES (LEAST PRIVILEGE)
+  # ============================================================================
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: CreateNewIamRole
+    Properties:
+      RoleName: !Sub '${ProjectPrefix}-lambda-execution-role-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: MediaProcessingLeastPrivilege
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 Input Bucket Read Only
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub 'arn:aws:s3:::${InputBucket}/*'
+              # S3 Output Bucket Write Only
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource: !Sub 'arn:aws:s3:::${OutputBucket}/*'
+              # DynamoDB Metadata Table Read / Write
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource: !GetAtt MediaMetadataTable.Arn
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+
+  # ============================================================================
+  # 4. CLOUDFRONT CDN WITH ORIGIN ACCESS CONTROL (OAC)
+  # ============================================================================
+
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${ProjectPrefix}-oac-${AWS::Region}'
+        Description: Origin Access Control for secure S3 media delivery
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: CloudFront CDN distribution for optimized media delivery
+        HttpVersion: http2and3
+        Origins:
+          - Id: S3OutputOrigin
+            DomainName: !GetAtt OutputBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3OutputOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          # AWS Managed CachingOptimized Cache Policy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          Compress: true
+        PriceClass: PriceClass_100
+
+  # S3 Output Bucket Policy granting access only to CloudFront via OAC
+  OutputBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref OutputBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${OutputBucket}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution.Id}'
+
+# ============================================================================
+# 5. STACK OUTPUTS (Delivered to Person 2 and Person 3)
+# ============================================================================
+Outputs:
+  Region:
+    Description: AWS Region where resources are deployed
+    Value: !Ref AWS::Region
+
+  InputBucketName:
+    Description: S3 Input Bucket for raw uploads (Person 3 uploads here)
+    Value: !Ref InputBucket
+    Export:
+      Name: !Sub '${ProjectPrefix}-InputBucket'
+
+  OutputBucketName:
+    Description: S3 Output Bucket for processed deliverables (Person 2 writes here)
+    Value: !Ref OutputBucket
+    Export:
+      Name: !Sub '${ProjectPrefix}-OutputBucket'
+
+  DynamoDBTableName:
+    Description: DynamoDB Metadata Table
+    Value: !Ref MediaMetadataTable
+    Export:
+      Name: !Sub '${ProjectPrefix}-DynamoDBTable'
+
+  CloudFrontDomainName:
+    Description: CloudFront CDN Domain URL for accessing processed media
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${ProjectPrefix}-CloudFrontDomain'
+
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID
+    Value: !Ref CloudFrontDistribution
+
+  LambdaExecutionRoleArn:
+    Description: IAM Role ARN to attach to Lambda (Person 2's processor)
+    Value: !If
+      - CreateNewIamRole
+      - !GetAtt LambdaExecutionRole.Arn
+      - !Sub 'arn:aws:iam::${AWS::AccountId}:role/LabRole'
