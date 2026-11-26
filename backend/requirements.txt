@@ -1,0 +1,3 @@
+# Packaged into the Lambda ZIP by scripts/package_lambda.sh (Linux wheels)
+Pillow==11.0.0
+# boto3 is already included in the AWS Lambda Python runtime (install locally only for development)
