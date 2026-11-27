@@ -61,14 +61,14 @@ def reduction_percent(original: int, optimized: int) -> float:
     return round((original - optimized) / original * 100, 2)
 
 
-def run_processor(src_path: str, out_dir: str, media_id: str) -> dict:
+def run_processor(src_path: str, out_dir: str, media_id: str, policy=None) -> dict:
     from image_processor import InvalidMediaError, process_image
     kind = media_type(src_path)
     if kind == "image":
-        return process_image(src_path, out_dir, media_id)
+        return process_image(src_path, out_dir, media_id, policy)
     if kind == "video":
         from video_processor import process_video
-        return process_video(src_path, out_dir, media_id)
+        return process_video(src_path, out_dir, media_id, policy)
     raise InvalidMediaError(f"Unsupported file type: {os.path.basename(src_path)}")
 
 

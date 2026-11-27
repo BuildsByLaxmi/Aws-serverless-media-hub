@@ -50,12 +50,25 @@ def make_thumbnail(img: Image.Image, out_path: str, size=THUMBNAIL_SIZE) -> str:
     return out_path
 
 
-def process_image(src_path: str, out_dir: str, media_id: str) -> dict:
+def process_image(src_path: str, out_dir: str, media_id: str, policy=None) -> dict:
+    """`policy` (optional) chooses settings per file and enables the PSNR measurement. Without it the
+    behaviour is exactly the original fixed-settings behaviour (used by the AWS Lambda)."""
     os.makedirs(out_dir, exist_ok=True)
     img = load_image(src_path)
-    optimized = resize_image(img)
+    extra = {}
+    max_dim, quality = MAX_DIMENSION, WEBP_QUALITY
+    if policy is not None:
+        settings = policy.image(img.width, img.height, os.path.getsize(src_path), img.mode == "RGBA")
+        max_dim, quality = settings["max_dimension"], settings["webp_quality"]
+        extra["settings"] = settings
+    optimized = resize_image(img, max_dim)
 
-    optimized_path = compress_to_webp(optimized, os.path.join(out_dir, f"{media_id}.webp"))
+    optimized_path = compress_to_webp(optimized, os.path.join(out_dir, f"{media_id}.webp"), quality)
+    if policy is not None:
+        from quality_metrics import psnr
+        with Image.open(optimized_path) as decoded:
+            decoded.load()
+            extra["psnr"] = psnr(optimized, decoded)
     thumbnail_path = make_thumbnail(img, os.path.join(out_dir, f"{media_id}_thumb.jpg"))
 
     return {
@@ -67,4 +80,5 @@ def process_image(src_path: str, out_dir: str, media_id: str) -> dict:
         "originalHeight": img.height,
         "optimizedWidth": optimized.width,
         "optimizedHeight": optimized.height,
+        **extra,
     }

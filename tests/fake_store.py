@@ -33,6 +33,12 @@ class FakeStore:
     def count_pending(self):
         return sum(r["status"] in ("UPLOADING", "UPLOADED", "PROCESSING") for r in self.rows.values())
 
+    def stats_rows(self, limit=10000):
+        return [dict(r) for r in self.rows.values()]
+
+    def get_many(self, ids):
+        return [dict(self.rows[i]) for i in ids if i in self.rows]
+
     def pending_ids(self, limit=10):
         return [m for m, r in self.rows.items() if r["status"] == "UPLOADED"][:limit]
 

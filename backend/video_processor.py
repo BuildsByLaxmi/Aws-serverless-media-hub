@@ -53,20 +53,34 @@ def extract_thumbnail(src_path: str, out_path: str, size=(200, 200)) -> str:
     return out_path
 
 
-def compress_video(src_path: str, out_path: str) -> str:
+def probe_duration(src_path: str) -> float:
+    r = subprocess.run([ffmpeg_path(), "-hide_banner", "-i", src_path],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr)
+    return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
+
+
+def compress_video(src_path: str, out_path: str, crf=None, max_height=None) -> str:
+    crf = str(crf if crf is not None else VIDEO_CRF)
+    max_height = max_height or MAX_VIDEO_HEIGHT
     _run([ffmpeg_path(), "-y", "-i", src_path,
           "-t", str(MAX_VIDEO_SECONDS),
-          "-vf", f"scale=-2:'min({MAX_VIDEO_HEIGHT},ih)'",
-          "-c:v", "libx264", "-preset", "veryfast", "-crf", VIDEO_CRF,
+          "-vf", f"scale=-2:'min({max_height},ih)'",
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", crf,
           "-c:a", "aac", "-b:a", "96k",
           "-movflags", "+faststart", out_path])
     return out_path
 
 
-def process_video(src_path: str, out_dir: str, media_id: str) -> dict:
+def process_video(src_path: str, out_dir: str, media_id: str, policy=None) -> dict:
     os.makedirs(out_dir, exist_ok=True)
     width, height = probe_dimensions(src_path)
-    optimized_path = compress_video(src_path, os.path.join(out_dir, f"{media_id}.mp4"))
+    extra, crf, max_h = {}, None, None
+    if policy is not None:
+        settings = policy.video(width, height, probe_duration(src_path), os.path.getsize(src_path))
+        crf, max_h = settings["crf"], settings["max_height"]
+        extra["settings"] = settings
+    optimized_path = compress_video(src_path, os.path.join(out_dir, f"{media_id}.mp4"), crf, max_h)
     thumbnail_path = extract_thumbnail(src_path, os.path.join(out_dir, f"{media_id}_thumb.jpg"))
     out_w, out_h = probe_dimensions(optimized_path)
     return {
@@ -78,4 +92,5 @@ def process_video(src_path: str, out_dir: str, media_id: str) -> dict:
         "originalHeight": height,
         "optimizedWidth": out_w,
         "optimizedHeight": out_h,
+        **extra,
     }

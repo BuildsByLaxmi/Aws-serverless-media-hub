@@ -8,6 +8,9 @@ import os
 from supabase_config import INPUT_BUCKET, OUTPUT_BUCKET, SIGNED_URL_SECONDS, STALE_PROCESSING_SECONDS, TABLE
 
 
+NEW_COLUMNS = ("original_width", "original_height", "optimized_width", "optimized_height", "psnr_db", "settings_used")
+
+
 def _now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
@@ -32,8 +35,26 @@ class SupabaseStore:
         return r.data
 
     def update_record(self, media_id, fields):
+        """If the optional feature columns were not added yet (0002_features.sql not run), retry without
+        them so the core pipeline keeps working."""
         fields = {**fields, "updated_at": _now()}
-        self.c.table(TABLE).update(fields).eq("media_id", media_id).execute()
+        try:
+            self.c.table(TABLE).update(fields).eq("media_id", media_id).execute()
+        except Exception as e:
+            missing = getattr(e, "code", "") in ("PGRST204", "42703") or "column" in str(e).lower()
+            if not (missing and any(k in fields for k in NEW_COLUMNS)):
+                raise
+            print("WARNING: feature columns missing; run supabase/migrations/0002_features.sql", flush=True)
+            core = {k: v for k, v in fields.items() if k not in NEW_COLUMNS}
+            self.c.table(TABLE).update(core).eq("media_id", media_id).execute()
+
+    def stats_rows(self, limit=10000):
+        r = self.c.table(TABLE).select("status,original_size,optimized_size,compression_percentage").limit(limit).execute()
+        return r.data
+
+    def get_many(self, ids):
+        r = self.c.table(TABLE).select("media_id,status,original_size,optimized_size,compression_percentage").in_("media_id", list(ids)).execute()
+        return r.data
 
     def mark_uploaded(self, media_id):
         """UPLOADING -> UPLOADED, atomic. Returns True if this call made the change."""

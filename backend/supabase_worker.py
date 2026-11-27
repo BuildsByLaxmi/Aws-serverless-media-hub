@@ -13,6 +13,7 @@ import time
 
 from image_processor import InvalidMediaError
 from media_common import media_type, output_keys, reduction_percent, run_processor
+from output_policy import DefaultPolicy
 from supabase_config import INPUT_BUCKET, MAX_INPUT_MB, OUTPUT_BUCKET
 
 CONTENT_TYPES = {".webp": "image/webp", ".jpg": "image/jpeg", ".mp4": "video/mp4"}
@@ -45,7 +46,7 @@ def process_media(store, media_id):
             if size > MAX_INPUT_MB * 1024 * 1024:
                 raise InvalidMediaError(f"File larger than {MAX_INPUT_MB} MB")
 
-            result = run_processor(src, os.path.join(tmp, "out"), media_id)
+            result = run_processor(src, os.path.join(tmp, "out"), media_id, DefaultPolicy)
             keys = output_keys(media_id, result["outputExt"])
             for path, key in ((result["optimizedPath"], keys["outputKey"]),
                               (result["thumbnailPath"], keys["thumbnailKey"])):
@@ -57,7 +58,10 @@ def process_media(store, media_id):
                 "original_size": size, "optimized_size": optimized,
                 "compression_percentage": reduction_percent(size, optimized),
                 "processed_path": keys["outputKey"], "thumbnail_path": keys["thumbnailKey"],
-                "processing_time": round(time.time() - started, 2), "error_message": None})
+                "processing_time": round(time.time() - started, 2), "error_message": None,
+                "original_width": result["originalWidth"], "original_height": result["originalHeight"],
+                "optimized_width": result["optimizedWidth"], "optimized_height": result["optimizedHeight"],
+                "psnr_db": result.get("psnr"), "settings_used": result.get("settings")})
             _log(mediaId=media_id, status="COMPLETED")
             return "COMPLETED"
     except Exception as e:      # invalid media and unexpected errors both end as FAILED (retry via re-upload)

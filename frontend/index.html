@@ -1,10 +1,20 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>Media Pipeline (Supabase)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font-family:system-ui;max-width:760px;margin:2rem auto;padding:0 1rem}
-.card{border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0;display:flex;gap:12px;align-items:center}
-.card img{width:80px;height:80px;object-fit:cover;border-radius:6px;background:#eee}
-.s{font-weight:600}.COMPLETED{color:#0a7d2c}.FAILED{color:#b00020}</style></head><body>
-<h1>Media Pipeline</h1><p>Upload an image or video (max 50 MB). Processed in a Python worker, served via signed URLs.</p>
-<input type="file" id="f" accept="image/*,video/*"> <button id="b">Upload</button> <span id="msg"></span>
+<style>body{font-family:system-ui;max-width:900px;margin:2rem auto;padding:0 1rem}
+.card{border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0}
+.row{display:flex;gap:12px;align-items:center}
+.thumb{width:80px;height:80px;object-fit:cover;border-radius:6px;background:#eee}
+.s{font-weight:600}.COMPLETED{color:#0a7d2c}.FAILED{color:#b00020}
+.panel{background:#f6f8fa;border-radius:8px;padding:10px 14px;margin:10px 0}
+.panel b{display:inline-block;min-width:150px}
+.ba{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.ba figure{margin:0}.ba img,.ba video{width:100%;max-height:300px;object-fit:contain;background:#eee;border-radius:6px}
+.ba figcaption{font-size:.85rem;color:#444}
+table{border-collapse:collapse;margin-top:8px;font-size:.9rem}td,th{border:1px solid #ddd;padding:4px 8px;text-align:left}
+.note{color:#555;font-size:.85rem}</style></head><body>
+<h1>Media Pipeline</h1><p>Upload images or videos (up to 10 at once, max 50 MB each). Processed in a Python worker, served via signed URLs.</p>
+<input type="file" id="f" accept="image/*,video/*" multiple> <button id="b">Upload</button> <span id="msg"></span>
+<h2>Optimization dashboard</h2><div class="panel" id="dash">Loading...</div>
+<div id="batchbox" hidden><h2>Last batch</h2><div class="panel" id="batch"></div></div>
 <h2>Results</h2><div id="list"></div>
 <script src="config.js"></script><script src="app.js"></script></body></html>

@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from media_common import media_type, slugify
+from quality_metrics import psnr_label
 from supabase_config import ALLOWED_MIME_PREFIXES, INPUT_BUCKET, MAX_INPUT_MB, OUTPUT_BUCKET
 
 WORKER_TOKEN = os.environ.get("WORKER_TRIGGER_TOKEN", "")
@@ -44,6 +45,27 @@ class RateLimiter:
             return False
         q.append(now)
         return True
+
+
+MAX_BATCH_IDS = 20
+
+
+def summarize(rows):
+    done = [r for r in rows if r["status"] == "COMPLETED"]
+    orig = sum(r.get("original_size") or 0 for r in done)
+    opt = sum(r.get("optimized_size") or 0 for r in done)
+    pcts = [float(r["compression_percentage"]) for r in done if r.get("compression_percentage") is not None]
+    return {
+        "total_files": len(rows),
+        "files_processed": len(done),
+        "failed": sum(r["status"] == "FAILED" for r in rows),
+        "in_progress": sum(r["status"] in ("UPLOADING", "UPLOADED", "PROCESSING") for r in rows),
+        "total_original_bytes": orig,
+        "total_optimized_bytes": opt,
+        "total_saved_bytes": orig - opt,
+        "overall_reduction_percent": round((orig - opt) / orig * 100, 2) if orig else 0.0,
+        "average_reduction_percent": round(sum(pcts) / len(pcts), 2) if pcts else 0.0,
+    }
 
 
 class UploadRequest(BaseModel):
@@ -114,7 +136,8 @@ def create_app(store, process_fn=None):
         return {"media_id": media_id, "status": store.get_record(media_id)["status"]}
 
     PUBLIC_FIELDS = ("media_id", "original_filename", "media_type", "original_size", "optimized_size",
-                     "compression_percentage", "status", "processing_time", "error_message", "created_at", "updated_at")
+                     "compression_percentage", "status", "processing_time", "error_message", "created_at", "updated_at",
+                     "original_width", "original_height", "optimized_width", "optimized_height", "psnr_db", "settings_used")
 
     def view(rec):
         """Only fields the UI needs: internal storage paths are never returned."""
@@ -122,6 +145,10 @@ def create_app(store, process_fn=None):
         if rec["status"] == "COMPLETED":
             out["processed_url"] = store.signed_url(OUTPUT_BUCKET, rec["processed_path"])
             out["thumbnail_url"] = store.signed_url(OUTPUT_BUCKET, rec["thumbnail_path"])
+            out["original_url"] = store.signed_url(INPUT_BUCKET, rec["original_path"])   # for before/after
+            o, n = rec.get("original_size") or 0, rec.get("optimized_size") or 0
+            out["space_saved_bytes"] = o - n
+            out["psnr_label"] = psnr_label(rec.get("psnr_db")) if rec.get("psnr_db") is not None else None
         return out
 
     @app.get("/api/media/{media_id}")
@@ -132,6 +159,24 @@ def create_app(store, process_fn=None):
         if not rec:
             raise HTTPException(404, "Unknown media id")
         return view(rec)
+
+    @app.get("/api/stats")
+    def stats():
+        """Aggregates only (no file names, ids, paths or URLs). Counts every upload: there are no accounts."""
+        return summarize(store.stats_rows())
+
+    @app.get("/api/batch")
+    def batch(ids: str = ""):
+        """Cumulative summary for the ids the caller supplies (max 20). Unknown ids are counted, not revealed."""
+        wanted = [i for i in ids.split(",") if i]
+        if not wanted or len(wanted) > MAX_BATCH_IDS or not all(ID_RE.match(i) for i in wanted):
+            raise HTTPException(400, f"Provide 1 to {MAX_BATCH_IDS} valid ids")
+        rows = store.get_many(wanted)
+        out = summarize(rows)
+        out["requested"] = len(wanted)
+        out["unknown"] = len(wanted) - len(rows)
+        out["items"] = [{"media_id": r["media_id"], "status": r["status"]} for r in rows]
+        return out
 
     @app.get("/api/admin/media")
     def history(x_worker_token: str = Header("")):
