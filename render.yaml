@@ -1,0 +1,16 @@
+# Render Blueprint, PREPARED BUT NOT DEPLOYED. Free plan: spins down after 15 min idle (~1 min cold start),
+# 512 MB RAM, 750 free hours/month. Secrets are entered in the Render dashboard, never committed.
+services:
+  - type: web
+    name: media-pipeline
+    runtime: docker
+    plan: free
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: WORKER_TRIGGER_TOKEN
+        generateValue: true
+      - key: PROCESS_INLINE
+        value: "true"

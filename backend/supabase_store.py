@@ -54,6 +54,11 @@ class SupabaseStore:
              .eq("media_id", media_id).eq("status", "PROCESSING").lt("updated_at", cutoff).execute())
         return bool(r.data)
 
+    def count_pending(self):
+        r = (self.c.table(TABLE).select("media_id", count="exact")
+             .in_("status", ["UPLOADING", "UPLOADED", "PROCESSING"]).limit(1).execute())
+        return r.count or 0
+
     def pending_ids(self, limit=10):
         r = (self.c.table(TABLE).select("media_id").eq("status", "UPLOADED")
              .order("created_at").limit(limit).execute())

@@ -6,18 +6,44 @@ Browser never sees the service-role key; it gets short-lived signed upload/downl
 import hmac
 import os
 import re
+import time
 import uuid
+from collections import defaultdict, deque
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from media_common import media_type, new_media_id
+from media_common import media_type, slugify
 from supabase_config import ALLOWED_MIME_PREFIXES, INPUT_BUCKET, MAX_INPUT_MB, OUTPUT_BUCKET
 
 WORKER_TOKEN = os.environ.get("WORKER_TRIGGER_TOKEN", "")
 PROCESS_INLINE = os.environ.get("PROCESS_INLINE", "false").lower() == "true"
-ID_RE = re.compile(r"^[a-z0-9-]{1,40}$")
+ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+UPLOADS_PER_HOUR = int(os.environ.get("UPLOADS_PER_HOUR", "30"))   # per client IP
+MAX_PENDING = int(os.environ.get("MAX_PENDING_UPLOADS", "200"))     # rows stuck in UPLOADING/UPLOADED
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "frontend")
+CODESPACES_ORIGIN_REGEX = r"https://.*\.(app\.github\.dev|githubpreview\.dev)"
+
+
+def new_media_id(filename: str) -> str:
+    """readable slug + 80 random bits (the id is the only thing protecting a status page)."""
+    return f"{slugify(filename)}-{uuid.uuid4().hex[:20]}"
+
+
+class RateLimiter:
+    def __init__(self, limit, window=3600):
+        self.limit, self.window, self.hits = limit, window, defaultdict(deque)
+
+    def allow(self, key):
+        now, q = time.time(), self.hits[key]
+        while q and now - q[0] > self.window:
+            q.popleft()
+        if len(q) >= self.limit:
+            return False
+        q.append(now)
+        return True
 
 
 class UploadRequest(BaseModel):
@@ -46,16 +72,24 @@ def validate_upload(req: UploadRequest):
 def create_app(store, process_fn=None):
     app = FastAPI(title="Supabase media pipeline API")
     origins = [o for o in os.environ.get("ALLOWED_ORIGINS", "http://localhost:5500,http://127.0.0.1:5500,http://localhost:8000").split(",") if o]
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"], allow_headers=["*"])
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_origin_regex=CODESPACES_ORIGIN_REGEX,
+                       allow_methods=["GET", "POST"], allow_headers=["*"])
+    limiter = RateLimiter(UPLOADS_PER_HOUR)
 
     def trigger(bg: BackgroundTasks, media_id: str):
         if PROCESS_INLINE and process_fn:      # demo convenience; the default is the separate worker
             bg.add_task(process_fn, store, media_id)
 
     @app.post("/api/uploads")
-    def create_upload(req: UploadRequest):
+    def create_upload(req: UploadRequest, request: Request):
         name = validate_upload(req)
-        media_id = new_media_id(name, uuid.uuid4().hex)
+        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+              or (request.client.host if request.client else "?"))
+        if not limiter.allow(ip):
+            raise HTTPException(429, "Too many uploads from your address. Try again later.")
+        if store.count_pending() >= MAX_PENDING:
+            raise HTTPException(503, "Upload queue is full. Try again later.")
+        media_id = new_media_id(name)
         path = f"uploads/{media_id}/{name}"
         store.create_record(media_id, name, media_type(name), req.size, path)
         return {"media_id": media_id, **store.signed_upload(path)}
@@ -95,9 +129,12 @@ def create_app(store, process_fn=None):
             raise HTTPException(404, "Unknown media id")
         return view(rec)
 
-    @app.get("/api/media")
-    def history():
-        return [view(r) for r in store.list_records(20)]
+    @app.get("/api/admin/media")
+    def history(x_worker_token: str = Header("")):
+        """Admin-only listing. Public users only ever see their own item by its unguessable id."""
+        if not WORKER_TOKEN or not hmac.compare_digest(x_worker_token, WORKER_TOKEN):
+            raise HTTPException(401, "Unauthorized")
+        return [view(r) for r in store.list_records(50)]
 
     @app.post("/internal/process/{media_id}")
     def internal_process(media_id: str, bg: BackgroundTasks, x_worker_token: str = Header("")):
@@ -108,6 +145,8 @@ def create_app(store, process_fn=None):
             bg.add_task(process_fn, store, media_id)
         return {"queued": media_id}
 
+    if os.path.isdir(FRONTEND_DIR):      # same-origin UI: one port, no CORS, works in Codespaces
+        app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="ui")
     return app
 
 

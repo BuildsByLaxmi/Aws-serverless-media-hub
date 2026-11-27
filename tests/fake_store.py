@@ -30,6 +30,9 @@ class FakeStore:
         if self.rows[mid]["status"] != "UPLOADED": return False
         self.update_record(mid, {"status": "PROCESSING", "error_message": None}); return True
 
+    def count_pending(self):
+        return sum(r["status"] in ("UPLOADING", "UPLOADED", "PROCESSING") for r in self.rows.values())
+
     def pending_ids(self, limit=10):
         return [m for m, r in self.rows.items() if r["status"] == "UPLOADED"][:limit]
 

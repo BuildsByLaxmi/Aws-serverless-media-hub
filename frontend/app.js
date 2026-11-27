@@ -16,10 +16,18 @@ $("b").onclick = async () => {
     const up = await api("/api/uploads", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename: file.name, size: file.size, content_type: file.type }) });
     $("msg").textContent = "Uploading...";
-    // Raw File body with its Content-Type (what storage-js sends for non-FormData bodies)
-    const put = await fetch(up.signed_url, { method: "PUT", body: file,
-      headers: { "Content-Type": file.type || "application/octet-stream", "cache-control": "max-age=3600" } });
-    if (!put.ok) throw new Error("Storage upload failed: " + put.status);
+    // Raw File body with its Content-Type (what storage-js sends for non-FormData bodies).
+    // XMLHttpRequest instead of fetch only so we can show upload progress.
+    await new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open("PUT", up.signed_url);
+      x.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      x.setRequestHeader("cache-control", "max-age=3600");
+      x.upload.onprogress = e => { if (e.lengthComputable) $("msg").textContent = `Uploading... ${Math.round(100 * e.loaded / e.total)}%`; };
+      x.onload = () => x.status >= 200 && x.status < 300 ? resolve() : reject(new Error("Storage upload failed: " + x.status));
+      x.onerror = () => reject(new Error("Network error while uploading"));
+      x.send(file);
+    });
     await api(`/api/uploads/${up.media_id}/complete`, { method: "POST" });
     tracked.add(up.media_id); save(); $("msg").textContent = "Uploaded. Processing...";
     refresh();

@@ -69,6 +69,47 @@ class TestUploadApi(Base):
         self.assertEqual(self.client.post("/internal/process/x", headers={"x-worker-token": "secret-token"}).status_code, 200)
 
 
+class TestAbuseProtection(Base):
+    def test_media_ids_unguessable(self):
+        ids = {self.client.post("/api/uploads", json={"filename": "a.jpg", "size": 5}).json()["media_id"] for _ in range(5)}
+        self.assertEqual(len(ids), 5)
+        for i in ids: self.assertGreaterEqual(len(i.split("-")[-1]), 20)
+
+    def test_public_listing_removed_admin_requires_token(self):
+        self.assertIn(self.client.get("/api/media").status_code, (404, 405))
+        self.assertEqual(self.client.get("/api/admin/media").status_code, 401)
+        self.assertEqual(self.client.get("/api/admin/media", headers={"x-worker-token": "secret-token"}).status_code, 200)
+
+    def test_rate_limit(self):
+        app = supabase_api.create_app(self.store, process_media)
+        supabase_api.UPLOADS_PER_HOUR = 3
+        try:
+            c = TestClient(supabase_api.create_app(self.store, process_media))
+        finally:
+            supabase_api.UPLOADS_PER_HOUR = 30
+        codes = [c.post("/api/uploads", json={"filename": "a.jpg", "size": 5}).status_code for _ in range(5)]
+        self.assertEqual(codes, [200, 200, 200, 429, 429])
+
+    def test_pending_cap(self):
+        supabase_api.MAX_PENDING = 2
+        try:
+            codes = [self.client.post("/api/uploads", json={"filename": "a.jpg", "size": 5}).status_code for _ in range(3)]
+        finally:
+            supabase_api.MAX_PENDING = 200
+        self.assertEqual(codes, [200, 200, 503])
+
+    def test_ui_served_same_origin(self):
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200); self.assertIn("Media Pipeline", r.text)
+        self.assertEqual(self.client.get("/app.js").status_code, 200)
+
+    def test_cors_allows_codespaces_origin_only(self):
+        h = {"Origin": "https://abc-8000.app.github.dev", "Access-Control-Request-Method": "POST"}
+        self.assertEqual(self.client.options("/api/uploads", headers=h).headers.get("access-control-allow-origin"), h["Origin"])
+        h["Origin"] = "https://evil.example.com"
+        self.assertIsNone(self.client.options("/api/uploads", headers=h).headers.get("access-control-allow-origin"))
+
+
 class TestImageFlow(Base):
     def test_valid_image_end_to_end(self):
         data = read(os.path.join(IMG, "large_photo.jpg"))
