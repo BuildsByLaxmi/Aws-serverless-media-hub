@@ -11,8 +11,8 @@ import os, sys, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend")); sys.path.insert(0, os.path.join(ROOT, "tests"))
-TOKEN = "worker-secret-for-tests"
-os.environ["WORKER_TRIGGER_TOKEN"] = TOKEN
+TOKEN = "secret-token"
+os.environ.setdefault("WORKER_TRIGGER_TOKEN", TOKEN)
 
 from fastapi.testclient import TestClient
 from fake_store import FakeStore
@@ -35,6 +35,7 @@ def make_actor_upload(client, store, name):
 
 class Matrix(unittest.TestCase):
     def setUp(self):
+        self._saved = (supabase_api.WORKER_TOKEN, supabase_api.UPLOADS_PER_HOUR)
         supabase_api.WORKER_TOKEN = TOKEN
         supabase_api.UPLOADS_PER_HOUR = 1000
         self.store = FakeStore()
@@ -45,6 +46,9 @@ class Matrix(unittest.TestCase):
         self.bob = make_actor_upload(self.anon, self.store, "bob.jpg")
         process_media(self.store, self.alice); process_media(self.store, self.bob)
         self.carol = make_actor_upload(self.anon, self.store, "carol.jpg")   # UPLOADED, not processed
+
+    def tearDown(self):
+        supabase_api.WORKER_TOKEN, supabase_api.UPLOADS_PER_HOUR = self._saved
 
     def assertNoLeak(self, resp, msg="", own_id=None):
         """No signed URLs/paths, and no OTHER item's id. Echoing the id the caller itself supplied is fine."""

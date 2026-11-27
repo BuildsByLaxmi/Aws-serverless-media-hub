@@ -115,7 +115,9 @@ class TestImageFlow(Base):
         data = read(os.path.join(IMG, "large_photo.jpg"))
         mid = self.upload("large_photo.jpg", data, "image/jpeg")
         self.assertEqual(process_media(self.store, mid), "COMPLETED")
-        rec = self.client.get(f"/api/media/{mid}").json()
+        api_view = self.client.get(f"/api/media/{mid}").json()
+        self.assertNotIn("processed_path", api_view)            # internal paths are not exposed
+        rec = {**self.store.get_record(mid), **api_view}
         self.assertEqual(rec["status"], "COMPLETED")
         self.assertEqual(rec["processed_path"], f"processed/{mid}.webp")
         self.assertEqual(rec["thumbnail_path"], f"thumbnails/{mid}.jpg")
