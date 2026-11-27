@@ -113,8 +113,12 @@ def create_app(store, process_fn=None):
             trigger(bg, media_id)
         return {"media_id": media_id, "status": store.get_record(media_id)["status"]}
 
+    PUBLIC_FIELDS = ("media_id", "original_filename", "media_type", "original_size", "optimized_size",
+                     "compression_percentage", "status", "processing_time", "error_message", "created_at", "updated_at")
+
     def view(rec):
-        out = dict(rec)
+        """Only fields the UI needs: internal storage paths are never returned."""
+        out = {k: rec.get(k) for k in PUBLIC_FIELDS}
         if rec["status"] == "COMPLETED":
             out["processed_url"] = store.signed_url(OUTPUT_BUCKET, rec["processed_path"])
             out["thumbnail_url"] = store.signed_url(OUTPUT_BUCKET, rec["thumbnail_path"])
