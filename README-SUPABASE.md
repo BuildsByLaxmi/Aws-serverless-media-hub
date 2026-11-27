@@ -40,3 +40,10 @@ Supabase calls are replaced by an in-memory fake (`tests/fake_store.py`); Pillow
 - Spec check: images max 1920 px, WebP q82, 200x200 JPEG thumbnail, video H.264 720p max. Video over 60 s is truncated to 60 s (original behaviour), not rejected.
 - Free tier: Supabase Free caps uploads at 50 MB per file, so `MAX_INPUT_MB` defaults to 50 (AWS version used 200).
 - The demo has no user login: anyone who can reach the API can upload. Do not expose it publicly without adding auth.
+
+## Live smoke test (real Supabase project)
+```bash
+export SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...   # or put them in backend/.env and `set -a; . backend/.env`
+python scripts/live_smoke_test.py
+```
+Uploads a real image and video through the API with signed upload URLs, runs the worker, fetches the signed output URLs, checks the duplicate run is skipped, then deletes its own test rows and files. Passed on 2026-11-27 against the `media-pipeline` project.
