@@ -1,49 +1,106 @@
-# Supabase version (branch `feature/supabase-integration`)
+# Supabase version of the Media Pipeline
 
-The original AWS implementation (Lambda, S3, DynamoDB, CloudFront) is untouched and kept as the reference. This branch adds a Supabase version beside it.
+The original AWS version (S3, Lambda, DynamoDB, CloudFront) is still in this repo and untouched. This version does the same job with free-tier friendly services. Use whichever fits: AWS needs an AWS account, this one needs a free Supabase project.
 
+## What it does
+Upload an image or video. A Python worker makes an optimized copy plus a thumbnail, and the page shows status, size saved, a preview and a download link.
+
+| | Output |
+|---|---|
+| Image | `processed/{id}.webp` (max 1920 px, WebP quality 82) + `thumbnails/{id}.jpg` (200x200) |
+| Video | `processed/{id}.mp4` (H.264, max 720p, first 60 s only) + `thumbnails/{id}.jpg` (200x200 frame) |
+
+## AWS vs Supabase
 | AWS | Supabase version |
 |---|---|
 | S3 input / output buckets | Storage `media-input` / `media-output` (private) |
-| DynamoDB `MediaMetadata` | Postgres `public.media_metadata` |
-| Upload Lambda | FastAPI app `backend/supabase_api.py` (signed upload URLs) |
-| Processor Lambda + S3 event | Python worker `backend/supabase_worker.py` (polls for `UPLOADED` rows; also `POST /internal/process/{id}` with a secret token) |
-| CloudFront | Short-lived signed URLs |
+| DynamoDB `MediaMetadata` | Postgres table `public.media_metadata` |
+| Upload API Lambda | FastAPI app `backend/supabase_api.py` |
+| S3 event -> processor Lambda | Python worker `backend/supabase_worker.py` (polls the table) |
+| CloudFront | Short-lived signed URLs (1 hour) |
+| Pillow / FFmpeg code | The same files, reused unchanged |
 
-Pillow and FFmpeg code (`image_processor.py`, `video_processor.py`, `media_common.py`) is reused unchanged except WebP quality default 80 -> 82 (per project spec).
+```
+Browser --1 POST /api/uploads--> FastAPI --creates row (UPLOADING)--> Postgres
+Browser --2 PUT file (signed URL, raw body)--------------------------> Storage media-input (private)
+Browser --3 POST /api/uploads/{id}/complete--> FastAPI (checks file, row -> UPLOADED)
+Worker  --4 claims row (PROCESSING), downloads, Pillow/FFmpeg--------> Storage media-output
+Worker  --5 row -> COMPLETED + sizes + paths                         Postgres
+Browser --6 GET /api/media/{id}--> status + signed preview/download URLs
+```
+Statuses: `UPLOADING -> UPLOADED -> PROCESSING -> COMPLETED | FAILED`. Two workers can never process the same file: the claim is one atomic database update.
 
-**Honest deployment note:** the API and worker run on your own machine (`localhost`). That is not a cloud-hosted serverless deployment. No free FFmpeg worker host has been verified yet.
-
-## Flow
-`POST /api/uploads` (validates, creates row `UPLOADING`, returns signed upload URL) -> browser PUTs file to `media-input` -> `POST /api/uploads/{id}/complete` (checks object exists, row `UPLOADED`) -> worker claims row atomically (`PROCESSING`), processes, uploads `processed/{id}.webp|mp4` and `thumbnails/{id}.jpg` to `media-output`, row `COMPLETED` or `FAILED` -> `GET /api/media/{id}` returns status plus signed URLs.
+## Prerequisites
+Python 3.10+, FFmpeg, a free Supabase project with two **private** buckets `media-input` and `media-output` and the table `public.media_metadata` (SQL in the Supabase project notes / your original setup).
 
 ## Setup
-1. Supabase Dashboard > SQL Editor: paste and run `supabase/migrations/0001_security.sql` (RLS deny-by-default, status constraint, keeps buckets private).
-2. Dashboard > Project Settings > API: copy Project URL and the `service_role` key into `backend/.env` (copy from `backend/.env.example`). Never commit it or put it in the frontend.
-3. `pip install -r backend/requirements-supabase.txt` and install FFmpeg.
+1. **Database + security SQL.** Supabase Dashboard > your project > SQL Editor > New query > paste `supabase/migrations/0001_security.sql` > Run. It is safe to run again. It turns on Row Level Security with no public access, gives the backend's `service_role` the table permissions, and keeps the buckets private.
+2. **Keys.** Dashboard > Project Settings > API: copy the Project URL and the secret / `service_role` key. Copy `backend/.env.example` to `backend/.env` and fill them in. `.env` is git-ignored. Never put the key in `frontend/`, in chat, or on GitHub.
+3. **Install.** `pip install -r backend/requirements-supabase.txt` and install FFmpeg (`sudo apt-get install ffmpeg`, `brew install ffmpeg`, or `choco install ffmpeg`).
 
-## Demo
+## Run the demo (one command)
 ```bash
-uvicorn supabase_api:app --app-dir backend --port 8000     # terminal 1 (API)
-python backend/supabase_worker.py                           # terminal 2 (worker)
-python -m http.server 5500 -d frontend                      # terminal 3 (UI at http://localhost:5500)
+./scripts/run_demo.sh
 ```
-Or set `PROCESS_INLINE=true` to skip the separate worker.
+This starts the worker and the API, and the API also serves the web page. Open http://localhost:8000. Prefer separate terminals?
+```bash
+python backend/supabase_worker.py                              # terminal 1: worker
+uvicorn supabase_api:app --app-dir backend --port 8000         # terminal 2: API + UI
+```
+(Or set `PROCESS_INLINE=true` and skip the worker; the API then processes uploads itself.)
+
+### GitHub Codespaces
+1. Repo page > Code > Codespaces > Create codespace on the branch. FFmpeg and Python packages install automatically (`.devcontainer/`).
+2. Keep keys out of git: repo Settings > Secrets and variables > Codespaces > New repository secret, add `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (rebuild or restart the codespace afterwards), or create `backend/.env` inside the codespace.
+3. In the terminal run `./scripts/run_demo.sh`. Open the **Ports** tab, find port 8000, click the globe icon. The page and the API share one address, so there is no `localhost` or CORS problem. Port 8000 stays private (only you) which is what you want.
+
+## API
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/uploads` `{filename,size,content_type}` | Validates, creates the row, returns `media_id` and a signed upload URL (rate limited per IP) |
+| `POST /api/uploads/{id}/complete` | Checks the file arrived, marks `UPLOADED` (safe to call twice) |
+| `GET /api/media/{id}` | Status, sizes, and signed URLs once `COMPLETED` |
+| `GET /api/admin/media` | Admin list. Needs header `X-Worker-Token` |
+| `POST /internal/process/{id}` | Trigger processing. Needs header `X-Worker-Token` |
+
+Example with curl (the file upload itself goes straight to Supabase with the returned URL):
+```bash
+curl -s localhost:8000/api/uploads -H 'content-type: application/json' -d '{"filename":"cat.jpg","size":123456,"content_type":"image/jpeg"}'
+curl -X PUT "<signed_url from above>" -H 'content-type: image/jpeg' --data-binary @cat.jpg
+curl -X POST localhost:8000/api/uploads/<media_id>/complete
+curl localhost:8000/api/media/<media_id>
+```
 
 ## Tests
 ```bash
-python -m pytest tests -q
+python -m pytest tests -q                 # 33 tests: original AWS processor tests + Supabase workflow
+python scripts/live_smoke_test.py         # LIVE: needs real keys, uploads and then deletes its own test data
 ```
-Supabase calls are replaced by an in-memory fake (`tests/fake_store.py`); Pillow/FFmpeg run for real. Live Supabase calls are not covered by tests.
+- Unit tests use an in-memory fake instead of Supabase (`tests/fake_store.py`); Pillow and FFmpeg run for real.
+- The live smoke test talks to your real Supabase project.
+- The browser flow was tested by hand-scripted Chrome against the real project.
 
-## Notes
-- Spec check: images max 1920 px, WebP q82, 200x200 JPEG thumbnail, video H.264 720p max. Video over 60 s is truncated to 60 s (original behaviour), not rejected.
-- Free tier: Supabase Free caps uploads at 50 MB per file, so `MAX_INPUT_MB` defaults to 50 (AWS version used 200).
-- The demo has no user login: anyone who can reach the API can upload. Do not expose it publicly without adding auth.
+## Security notes
+- Buckets are private; files are only reachable through signed URLs. Service key lives only in backend environment variables.
+- Server-side checks: allowed file extensions and MIME types, size limit (default 50 MB, the Supabase Free cap), sanitized filenames, atomic duplicate-processing guard, worker endpoint needs a secret token (constant-time compare).
+- Media ids contain 80 random bits and the public listing is removed, so a status page can only be opened by someone who has its id.
+- Limits per IP (30 uploads/hour) and a cap on queued uploads protect your free storage.
+- **There is no user login.** Anyone who can reach the API can upload (within the limits). That is fine for a demo on a private Codespaces port. Do not publish it widely without adding authentication.
+- `X-Forwarded-For` is trusted for the rate limit; behind a proxy that's correct, but exposed directly it can be spoofed.
 
-## Live smoke test (real Supabase project)
-```bash
-export SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=...   # or put them in backend/.env and `set -a; . backend/.env`
-python scripts/live_smoke_test.py
-```
-Uploads a real image and video through the API with signed upload URLs, runs the worker, fetches the signed output URLs, checks the duplicate run is skipped, then deletes its own test rows and files. Passed on 2026-11-27 against the `media-pipeline` project.
+## Hosting for free (prepared, not deployed)
+`Dockerfile` and `render.yaml` are ready, so the API + UI + worker run as one Render web service on the free plan. Limits from Render's pages (https://render.com/docs/free, https://render.com/pricing): sleeps after 15 min idle (about 1 min to wake), 512 MB RAM, 750 free hours/month, files are lost on restart (fine: files live in Supabase), outbound bandwidth beyond the free amount is billed unless no card is on file, in which case it suspends. Large videos may not fit in 512 MB; not tested. Nothing has been deployed. Supabase Free: 1 GB storage, 500 MB database, 5 GB egress, 50 MB per file, project pauses after 1 week of inactivity (resume it from the dashboard).
+
+## Common errors
+| Message | Fix |
+|---|---|
+| `permission denied for table media_metadata` | Run `0001_security.sql` (it grants `service_role`). |
+| `Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY` | Fill `backend/.env` or export the variables. |
+| `FFmpeg not found` | Install FFmpeg and restart the worker. |
+| Page says `Failed to fetch` | Open the page from the API's own address (port 8000), not a different server. |
+| Upload works but status stays `UPLOADED` | The worker isn't running (or set `PROCESS_INLINE=true`). |
+| `Too many uploads` (429) | Wait, or raise `UPLOADS_PER_HOUR`. |
+| Supabase calls fail after a quiet week | Free projects pause; click Restore in the dashboard. |
+
+## Spec notes and known behavior
+Images: max 1920 px, WebP q82 (changed from 80 in the original code to match the spec). Videos longer than 60 s are cut to the first 60 s, not rejected (original behavior). Tiny PNGs can get slightly bigger as WebP, so the reduction percentage can be negative. Input limit is 50 MB here (200 MB on AWS).

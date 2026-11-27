@@ -17,6 +17,8 @@ Website ─► S3 Input ─► S3 Event ─► Lambda (Pillow / FFmpeg) ─► S
 ```
 For the full diagram, the interface contract and the design decisions, see [`infrastructure/architecture.md`](infrastructure/architecture.md).
 
+> **Free alternative:** a Supabase version of this pipeline (no AWS account needed) is described in [`README-SUPABASE.md`](README-SUPABASE.md).
+
 ---
 
 ## Project structure
