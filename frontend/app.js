@@ -16,9 +16,9 @@ $("b").onclick = async () => {
     const up = await api("/api/uploads", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename: file.name, size: file.size, content_type: file.type }) });
     $("msg").textContent = "Uploading...";
-    // Same request supabase-js uploadToSignedUrl makes
-    const fd = new FormData(); fd.append("cacheControl", "3600"); fd.append("", file);
-    const put = await fetch(up.signed_url, { method: "PUT", body: fd, headers: { "x-upsert": "false" } });
+    // Raw File body with its Content-Type (what storage-js sends for non-FormData bodies)
+    const put = await fetch(up.signed_url, { method: "PUT", body: file,
+      headers: { "Content-Type": file.type || "application/octet-stream", "cache-control": "max-age=3600" } });
     if (!put.ok) throw new Error("Storage upload failed: " + put.status);
     await api(`/api/uploads/${up.media_id}/complete`, { method: "POST" });
     tracked.add(up.media_id); save(); $("msg").textContent = "Uploaded. Processing...";
