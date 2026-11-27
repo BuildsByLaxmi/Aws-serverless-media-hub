@@ -13,3 +13,4 @@ backend/.env
 !.env.example
 !backend/.env.example
 .pytest_cache/
+supabase-integration-*.txt

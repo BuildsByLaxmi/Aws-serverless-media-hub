@@ -1,6 +1,6 @@
 """Tests for the Supabase workflow, run against FakeStore (no network, no credentials).
 Real Pillow/FFmpeg processing is exercised; only Supabase I/O is faked."""
-import io, os, subprocess, sys, unittest
+import io, os, shutil, subprocess, sys, tempfile, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend")); sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -182,7 +182,22 @@ class TestSpec(unittest.TestCase):
         self.assertEqual(image_processor.WEBP_QUALITY, 82)
 
 
+def _has_ffmpeg():
+    try:
+        from video_processor import ffmpeg_path
+        p = ffmpeg_path()
+        if p and os.path.exists(p):
+            d = os.path.dirname(p)
+            if d and d not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+            return True
+        return False
+    except Exception:
+        return False
+
+
 class TestVideoFlow(Base):
+    @unittest.skipUnless(_has_ffmpeg(), "ffmpeg not installed")
     def test_video_end_to_end(self):
         mid = self.upload("sample_video.mp4", read(VID), "video/mp4")
         self.assertEqual(process_media(self.store, mid), "COMPLETED")
@@ -191,12 +206,17 @@ class TestVideoFlow(Base):
         self.assertEqual(rec["thumbnail_path"], f"thumbnails/{mid}.jpg")
         th = Image.open(io.BytesIO(self.store.objects[(OUTPUT_BUCKET, rec["thumbnail_path"])]))
         self.assertEqual((th.format, th.size), ("JPEG", (200, 200)))
-        tmp = "/tmp/_out_test.mp4"
-        with open(tmp, "wb") as f: f.write(self.store.objects[(OUTPUT_BUCKET, rec["processed_path"])])
-        info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                               "stream=codec_name,height", "-of", "csv=p=0", tmp], capture_output=True, text=True).stdout.strip()
-        codec, height = info.split(",")
-        self.assertEqual(codec, "h264"); self.assertLessEqual(int(height), 720)
+        tmp = os.path.join(tempfile.gettempdir(), f"_out_test_{mid}.mp4")
+        try:
+            with open(tmp, "wb") as f: f.write(self.store.objects[(OUTPUT_BUCKET, rec["processed_path"])])
+            info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                                   "stream=codec_name,height", "-of", "csv=p=0", tmp], capture_output=True, text=True).stdout.strip()
+            codec, height = info.split(",")
+            self.assertEqual(codec, "h264"); self.assertLessEqual(int(height), 720)
+        finally:
+            if os.path.exists(tmp):
+                try: os.remove(tmp)
+                except OSError: pass
 
     def test_corrupt_video_marked_failed(self):
         mid = self.upload("broken.mp4", b"this is not a video at all" * 50)

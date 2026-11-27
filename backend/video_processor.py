@@ -24,6 +24,15 @@ def ffmpeg_path() -> str:
     for p in ("/opt/bin/ffmpeg", shutil.which("ffmpeg") or ""):
         if p and os.path.exists(p):
             return p
+    # Check standard Windows paths if not yet in system PATH
+    win_candidates = [
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.1-full_build\bin\ffmpeg.exe"),
+        r"C:\ProgramData\chocolatey\bin\ffmpeg.exe",
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+    ]
+    for p in win_candidates:
+        if os.path.exists(p):
+            return p
     raise RuntimeError("FFmpeg not found. Attach the FFmpeg Lambda layer (/opt/bin/ffmpeg).")
 
 

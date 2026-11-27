@@ -1,5 +1,5 @@
 """Tests for the five features: before/after data, dashboard stats, PSNR, batch summary, output selection."""
-import io, os, sys, unittest
+import io, os, shutil, sys, unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend")); sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -14,6 +14,14 @@ from supabase_config import INPUT_BUCKET
 from test_supabase_pipeline import Base as _Base, read, IMG, VID
 from supabase_worker import process_media
 import tempfile
+
+
+def _has_ffmpeg():
+    try:
+        from video_processor import ffmpeg_path
+        return bool(ffmpeg_path())
+    except Exception:
+        return False
 
 
 class TestOutputSelection(unittest.TestCase):
@@ -52,6 +60,7 @@ class TestOutputSelection(unittest.TestCase):
             r = process_image(os.path.join(IMG, "logo_transparent.png"), t, "x3", policy=op.DefaultPolicy)
             self.assertEqual(Image.open(r["optimizedPath"]).mode, "RGBA")
 
+    @unittest.skipUnless(_has_ffmpeg(), "ffmpeg not installed")
     def test_video_policy_settings(self):
         with tempfile.TemporaryDirectory() as t:
             r = process_video(VID, t, "v1", policy=op.DefaultPolicy)
@@ -98,6 +107,7 @@ class TestWorkerAndApi(Base):
         self.assertIn("reason", j["settings_used"])
         self.assertNotIn("original_path", j); self.assertNotIn("processed_path", j)
 
+    @unittest.skipUnless(_has_ffmpeg(), "ffmpeg not installed")
     def test_video_has_no_psnr(self):
         mid = self.upload("v.mp4", read(VID), "video/mp4")
         j = self.client.get(f"/api/media/{mid}").json()

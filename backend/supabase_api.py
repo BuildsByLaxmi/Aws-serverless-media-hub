@@ -17,7 +17,9 @@ from pydantic import BaseModel
 
 from media_common import media_type, slugify
 from quality_metrics import psnr_label
-from supabase_config import ALLOWED_MIME_PREFIXES, INPUT_BUCKET, MAX_INPUT_MB, OUTPUT_BUCKET
+from supabase_config import ALLOWED_MIME_PREFIXES, INPUT_BUCKET, MAX_INPUT_MB, OUTPUT_BUCKET, load_env_config
+
+load_env_config()
 
 WORKER_TOKEN = os.environ.get("WORKER_TRIGGER_TOKEN", "")
 PROCESS_INLINE = os.environ.get("PROCESS_INLINE", "false").lower() == "true"
@@ -51,15 +53,24 @@ MAX_BATCH_IDS = 20
 
 
 def summarize(rows):
-    done = [r for r in rows if r["status"] == "COMPLETED"]
-    orig = sum(r.get("original_size") or 0 for r in done)
-    opt = sum(r.get("optimized_size") or 0 for r in done)
-    pcts = [float(r["compression_percentage"]) for r in done if r.get("compression_percentage") is not None]
+    if not rows:
+        rows = []
+    done = [r for r in rows if r.get("status") == "COMPLETED"]
+    orig = sum(int(r.get("original_size") or 0) for r in done)
+    opt = sum(int(r.get("optimized_size") or 0) for r in done)
+    pcts = []
+    for r in done:
+        val = r.get("compression_percentage")
+        if val is not None and val != "":
+            try:
+                pcts.append(float(val))
+            except (ValueError, TypeError):
+                pass
     return {
         "total_files": len(rows),
         "files_processed": len(done),
-        "failed": sum(r["status"] == "FAILED" for r in rows),
-        "in_progress": sum(r["status"] in ("UPLOADING", "UPLOADED", "PROCESSING") for r in rows),
+        "failed": sum(r.get("status") == "FAILED" for r in rows),
+        "in_progress": sum(r.get("status") in ("UPLOADING", "UPLOADED", "PROCESSING") for r in rows),
         "total_original_bytes": orig,
         "total_optimized_bytes": opt,
         "total_saved_bytes": orig - opt,
@@ -163,7 +174,11 @@ def create_app(store, process_fn=None):
     @app.get("/api/stats")
     def stats():
         """Aggregates only (no file names, ids, paths or URLs). Counts every upload: there are no accounts."""
-        return summarize(store.stats_rows())
+        try:
+            return summarize(store.stats_rows())
+        except Exception as e:
+            print(f"Error generating stats: {e}", flush=True)
+            return summarize([])
 
     @app.get("/api/batch")
     def batch(ids: str = ""):
@@ -171,11 +186,15 @@ def create_app(store, process_fn=None):
         wanted = [i for i in ids.split(",") if i]
         if not wanted or len(wanted) > MAX_BATCH_IDS or not all(ID_RE.match(i) for i in wanted):
             raise HTTPException(400, f"Provide 1 to {MAX_BATCH_IDS} valid ids")
-        rows = store.get_many(wanted)
+        try:
+            rows = store.get_many(wanted)
+        except Exception as e:
+            print(f"Error fetching batch: {e}", flush=True)
+            rows = []
         out = summarize(rows)
         out["requested"] = len(wanted)
         out["unknown"] = len(wanted) - len(rows)
-        out["items"] = [{"media_id": r["media_id"], "status": r["status"]} for r in rows]
+        out["items"] = [{"media_id": r.get("media_id"), "status": r.get("status")} for r in rows if r.get("media_id")]
         return out
 
     @app.get("/api/admin/media")

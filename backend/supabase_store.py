@@ -49,12 +49,22 @@ class SupabaseStore:
             self.c.table(TABLE).update(core).eq("media_id", media_id).execute()
 
     def stats_rows(self, limit=10000):
-        r = self.c.table(TABLE).select("status,original_size,optimized_size,compression_percentage").limit(limit).execute()
-        return r.data
+        try:
+            r = self.c.table(TABLE).select("status,original_size,optimized_size,compression_percentage").limit(limit).execute()
+            return r.data or []
+        except Exception as e:
+            print(f"stats_rows query error: {e}", flush=True)
+            return []
 
     def get_many(self, ids):
-        r = self.c.table(TABLE).select("media_id,status,original_size,optimized_size,compression_percentage").in_("media_id", list(ids)).execute()
-        return r.data
+        if not ids:
+            return []
+        try:
+            r = self.c.table(TABLE).select("media_id,status,original_size,optimized_size,compression_percentage").in_("media_id", list(ids)).execute()
+            return r.data or []
+        except Exception as e:
+            print(f"get_many query error: {e}", flush=True)
+            return []
 
     def mark_uploaded(self, media_id):
         """UPLOADING -> UPLOADED, atomic. Returns True if this call made the change."""

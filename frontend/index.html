@@ -1,20 +1,136 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Media Pipeline (Supabase)</title>
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font-family:system-ui;max-width:900px;margin:2rem auto;padding:0 1rem}
-.card{border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0}
-.row{display:flex;gap:12px;align-items:center}
-.thumb{width:80px;height:80px;object-fit:cover;border-radius:6px;background:#eee}
-.s{font-weight:600}.COMPLETED{color:#0a7d2c}.FAILED{color:#b00020}
-.panel{background:#f6f8fa;border-radius:8px;padding:10px 14px;margin:10px 0}
-.panel b{display:inline-block;min-width:150px}
-.ba{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
-.ba figure{margin:0}.ba img,.ba video{width:100%;max-height:300px;object-fit:contain;background:#eee;border-radius:6px}
-.ba figcaption{font-size:.85rem;color:#444}
-table{border-collapse:collapse;margin-top:8px;font-size:.9rem}td,th{border:1px solid #ddd;padding:4px 8px;text-align:left}
-.note{color:#555;font-size:.85rem}</style></head><body>
-<h1>Media Pipeline</h1><p>Upload images or videos (up to 10 at once, max 50 MB each). Processed in a Python worker, served via signed URLs.</p>
-<input type="file" id="f" accept="image/*,video/*" multiple> <button id="b">Upload</button> <span id="msg"></span>
-<h2>Optimization dashboard</h2><div class="panel" id="dash">Loading...</div>
-<div id="batchbox" hidden><h2>Last batch</h2><div class="panel" id="batch"></div></div>
-<h2>Results</h2><div id="list"></div>
-<script src="config.js"></script><script src="app.js"></script></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Media Pipeline - AWS Serverless Media Transcoder &amp; Thumbnail Pipeline</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="config.js"></script>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>Serverless Media <span>Transcoder</span></h1>
+      <p class="sub">Event-driven pipeline that compresses images (Pillow / WebP) and transcodes videos (FFmpeg), creates thumbnails, records metrics (PSNR, size savings), and serves media through CDN-signed URLs.</p>
+      <span id="modeBadge" class="badge">Checking connection...</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- 1. Upload Section -->
+    <section class="panel">
+      <h2>1 · Upload media</h2>
+      <label id="dropZone" class="drop">
+        <input type="file" id="fileInput" accept="image/*,video/*" multiple hidden />
+        <div class="drop-icon">⬆</div>
+        <div><strong>Choose files</strong> or drag and drop them here</div>
+        <div class="muted">JPG · PNG · WEBP · GIF · MP4 · MOV (Batch upload up to 10 files, max 50 MB each)</div>
+      </label>
+      <div id="fileInfo" class="file-info hidden"></div>
+      <button id="uploadBtn" class="btn" disabled>Upload &amp; Process</button>
+      <span id="uploadMsg" class="muted" style="margin-left: 12px;"></span>
+    </section>
+
+    <!-- 2. Processing Pipeline Status -->
+    <section class="panel" id="statusPanel">
+      <h2>2 · Processing pipeline <span id="statusText" class="status IDLE">IDLE</span></h2>
+      <ol class="pipeline" id="pipeline">
+        <li data-step="client">1. Web Client</li>
+        <li data-step="input">2. Storage Input</li>
+        <li data-step="worker">3. Worker / API</li>
+        <li data-step="engine">4. Pillow / FFmpeg</li>
+        <li data-step="output">5. Storage Output</li>
+        <li data-step="db">6. Database</li>
+        <li data-step="cdn">7. Delivery / CDN</li>
+      </ol>
+      <div class="progress"><div id="progressBar"></div></div>
+      <div id="errorBox" class="error hidden"></div>
+    </section>
+
+    <!-- 3. Before & After View (Active Item) -->
+    <section class="panel hidden" id="resultPanel">
+      <h2>3 · Before &amp; after comparison <span id="featureBadges"></span></h2>
+      <div class="compare">
+        <figure>
+          <figcaption id="beforeCaption">Original</figcaption>
+          <div id="beforeView" class="media-view"></div>
+          <div class="size" id="beforeSize">–</div>
+        </figure>
+        <figure>
+          <figcaption id="afterCaption">Optimized</figcaption>
+          <div id="afterView" class="media-view"></div>
+          <div class="size" id="afterSize">–</div>
+        </figure>
+        <figure class="thumb-fig">
+          <figcaption>Thumbnail (200×200)</figcaption>
+          <div id="thumbView" class="media-view thumb"></div>
+          <div class="size" id="thumbSize">–</div>
+        </figure>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><span>Original size</span><b id="sOriginal">–</b></div>
+        <div class="stat"><span>Optimized size</span><b id="sOptimized">–</b></div>
+        <div class="stat good"><span>Space saved</span><b id="sSaved">–</b></div>
+        <div class="stat good"><span>Reduction</span><b id="sReduction">–</b></div>
+        <div class="stat"><span>Dimensions</span><b id="sDims">–</b></div>
+        <div class="stat"><span>Quality (PSNR)</span><b id="sPsnr">–</b></div>
+        <div class="stat"><span>Processing time</span><b id="sTime">–</b></div>
+      </div>
+      <div class="links" id="links"></div>
+      <details>
+        <summary>View database record metadata (JSON)</summary>
+        <pre id="recordJson"></pre>
+      </details>
+    </section>
+
+    <!-- 4. Optimization Dashboard (Feature 2) -->
+    <section class="panel" id="dashPanel">
+      <h2>4 · Optimization dashboard <button id="refreshStatsBtn" class="btn small ghost">Refresh totals</button></h2>
+      <div class="muted">Cumulative media telemetry and cloud storage savings across all processed files.</div>
+      <div class="dash-grid" id="dashGrid">
+        <div class="dash-card"><span>Files processed</span><b id="dProcessed">0</b></div>
+        <div class="dash-card"><span>In progress</span><b id="dInProgress">0</b></div>
+        <div class="dash-card"><span>Failed</span><b id="dFailed">0</b></div>
+        <div class="dash-card"><span>Original total</span><b id="dOriginal">0 B</b></div>
+        <div class="dash-card"><span>Optimized total</span><b id="dOptimized">0 B</b></div>
+        <div class="dash-card good"><span>Total saved</span><b id="dSaved">0 B</b></div>
+        <div class="dash-card good"><span>Avg reduction</span><b id="dReduction">0.0%</b></div>
+      </div>
+      <div id="batchBox" class="hidden" style="margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px;">
+        <h3 style="font-size: 15px; margin: 0 0 8px;">Last batch summary (<span id="batchCount">0</span> files)</h3>
+        <div class="dash-grid" id="batchGrid"></div>
+      </div>
+    </section>
+
+    <!-- 5. Processed Media History -->
+    <section class="panel">
+      <h2>5 · Processed media history <button id="refreshHistoryBtn" class="btn small ghost">Refresh list</button></h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Thumb</th>
+              <th>Filename</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Original</th>
+              <th>Optimized</th>
+              <th>Saved</th>
+              <th>Quality</th>
+              <th>Settings</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="10" class="muted" style="text-align: center; padding: 18px;">No media files uploaded yet. Choose an image or video above to begin.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>AWS Serverless Media Transcoder and Thumbnail Pipeline · College Capstone Demonstration</footer>
+  <script src="app.js"></script>
+</body>
+</html>

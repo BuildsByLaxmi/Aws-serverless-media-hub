@@ -70,7 +70,15 @@ class ImageTests(unittest.TestCase):
             run_processor(os.path.join(IMAGES, "not_media.txt"), self.out, "x")
 
 
-@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+def _has_ffmpeg():
+    try:
+        from video_processor import ffmpeg_path
+        return bool(ffmpeg_path())
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(_has_ffmpeg(), "ffmpeg not installed")
 class VideoTests(unittest.TestCase):
     def test_video_compress_and_thumbnail(self):
         out = tempfile.mkdtemp()

@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 command -v ffmpeg >/dev/null || { echo "ffmpeg not found. Install it first (see README-SUPABASE.md)"; exit 1; }
 [ -f backend/.env ] && { set -a; . backend/.env; set +a; }
+[ -f .env ] && { set -a; . .env; set +a; }
 : "${SUPABASE_URL:?Set SUPABASE_URL (backend/.env or Codespaces secret)}"
 : "${SUPABASE_SERVICE_ROLE_KEY:?Set SUPABASE_SERVICE_ROLE_KEY (backend/.env or Codespaces secret)}"
 python backend/supabase_worker.py &
