@@ -3,6 +3,7 @@ Upload + status API (replaces the upload Lambda). FastAPI; run:
     uvicorn supabase_api:app --app-dir backend --port 8000
 Browser never sees the service-role key; it gets short-lived signed upload/download URLs.
 """
+import datetime as dt
 import hmac
 import os
 import re
@@ -66,6 +67,75 @@ def summarize(rows):
                 pcts.append(float(val))
             except (ValueError, TypeError):
                 pass
+
+    psnrs = []
+    for r in done:
+        val = r.get("psnr_db")
+        if val is not None and val != "":
+            try:
+                psnrs.append(float(val))
+            except (ValueError, TypeError):
+                pass
+
+    proc_times = []
+    for r in done:
+        val = r.get("processing_time")
+        if val is not None and val != "":
+            try:
+                proc_times.append(float(val))
+            except (ValueError, TypeError):
+                pass
+
+    # Media type distribution
+    type_counts = {"image": 0, "video": 0}
+    for r in rows:
+        mt = (r.get("media_type") or "").lower()
+        if mt == "image" or "image" in mt:
+            type_counts["image"] += 1
+        elif mt == "video" or "video" in mt:
+            type_counts["video"] += 1
+
+    # Output format distribution
+    format_counts = {}
+    for r in done:
+        settings = r.get("settings_used")
+        fmt_name = ""
+        if isinstance(settings, dict):
+            fmt_name = settings.get("format") or settings.get("output_format") or ""
+        if not fmt_name and (r.get("media_type") == "video" or "video" in (r.get("media_type") or "")):
+            fmt_name = "mp4"
+        elif not fmt_name:
+            fmt_name = "webp"
+        fmt_name = str(fmt_name).upper()
+        format_counts[fmt_name] = format_counts.get(fmt_name, 0) + 1
+
+    # Daily activity (grouped by YYYY-MM-DD)
+    daily = {}
+    for r in rows:
+        created = r.get("created_at")
+        if created:
+            date_str = str(created)[:10]
+        else:
+            date_str = dt.date.today().isoformat()
+        if date_str not in daily:
+            daily[date_str] = {"date": date_str, "uploaded": 0, "completed": 0, "bytes_saved": 0}
+        daily[date_str]["uploaded"] += 1
+        if r.get("status") == "COMPLETED":
+            daily[date_str]["completed"] += 1
+            o = int(r.get("original_size") or 0)
+            n = int(r.get("optimized_size") or 0)
+            if o > n:
+                daily[date_str]["bytes_saved"] += (o - n)
+    daily_list = sorted(daily.values(), key=lambda d: d["date"])[-14:]
+
+    # Quality distribution buckets (PSNR tiers)
+    quality_buckets = {
+        "excellent_35_plus": sum(1 for p in psnrs if p >= 35.0),
+        "good_30_35": sum(1 for p in psnrs if 30.0 <= p < 35.0),
+        "acceptable_25_30": sum(1 for p in psnrs if 25.0 <= p < 30.0),
+        "low_under_25": sum(1 for p in psnrs if p < 25.0),
+    }
+
     return {
         "total_files": len(rows),
         "files_processed": len(done),
@@ -76,6 +146,17 @@ def summarize(rows):
         "total_saved_bytes": orig - opt,
         "overall_reduction_percent": round((orig - opt) / orig * 100, 2) if orig else 0.0,
         "average_reduction_percent": round(sum(pcts) / len(pcts), 2) if pcts else 0.0,
+        "average_psnr_db": round(sum(psnrs) / len(psnrs), 2) if psnrs else None,
+        "average_processing_time_sec": round(sum(proc_times) / len(proc_times), 2) if proc_times else 0.0,
+        "media_type_distribution": type_counts,
+        "format_distribution": format_counts,
+        "daily_activity": daily_list,
+        "quality_distribution": quality_buckets,
+        "storage_comparison": {
+            "original_mb": round(orig / 1048576, 2),
+            "optimized_mb": round(opt / 1048576, 2),
+            "saved_mb": round((orig - opt) / 1048576, 2),
+        },
     }
 
 

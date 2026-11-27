@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Media Pipeline - AWS Serverless Media Transcoder &amp; Thumbnail Pipeline</title>
   <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="config.js"></script>
 </head>
 <body>
   <header>
     <div class="wrap">
-      <h1>Serverless Media <span>Transcoder</span></h1>
+      <h1>Serverless Media <span>Transcoder &amp; Analytics</span></h1>
       <p class="sub">Event-driven pipeline that compresses images (Pillow / WebP) and transcodes videos (FFmpeg), creates thumbnails, records metrics (PSNR, size savings), and serves media through CDN-signed URLs.</p>
       <span id="modeBadge" class="badge">Checking connection...</span>
     </div>
@@ -68,6 +69,64 @@
         </figure>
       </div>
 
+      <!-- Section 3 Advanced Visual Analytics Subgrid -->
+      <div class="analytics-subgrid">
+        <!-- Size Comparison Bar Chart -->
+        <div class="analytics-card">
+          <div class="analytics-card-title">File Size Comparison</div>
+          <div class="chart-container" style="position: relative; height: 160px;">
+            <canvas id="itemSizeChart"></canvas>
+          </div>
+        </div>
+
+        <!-- PSNR Quality Score Visualization -->
+        <div class="analytics-card">
+          <div class="analytics-card-title">PSNR Quality Metric</div>
+          <div id="itemPsnrContent">
+            <div class="metric-big" id="itemPsnrVal">–</div>
+            <div class="psnr-meter-bar">
+              <div class="psnr-meter-fill" id="itemPsnrFill" style="width: 0%;"></div>
+            </div>
+            <div class="psnr-scale-labels">
+              <span>&lt;25 dB (Low)</span>
+              <span>30 dB (Good)</span>
+              <span>35+ dB (Excellent)</span>
+            </div>
+            <div id="itemPsnrNote" class="muted" style="margin-top: 8px;"></div>
+          </div>
+        </div>
+
+        <!-- Compression Savings Gauge -->
+        <div class="analytics-card">
+          <div class="analytics-card-title">Compression Savings</div>
+          <div class="metric-big good" id="itemReductionVal">–</div>
+          <div class="progress" style="height: 10px; margin: 10px 0 6px;">
+            <div id="itemReductionBar" style="width: 0%; background: var(--ok); height: 100%; border-radius: 4px; transition: width 0.4s;"></div>
+          </div>
+          <div class="muted" id="itemSavingsBytesNote">0 B saved</div>
+        </div>
+
+        <!-- Dimension & Throughput Comparison -->
+        <div class="analytics-card">
+          <div class="analytics-card-title">Resolution &amp; Processing Telemetry</div>
+          <div class="dim-compare-wrap">
+            <div class="dim-box">
+              <span class="dim-lbl">Original</span>
+              <b id="itemOrigDim">–</b>
+            </div>
+            <div class="dim-arrow">➔</div>
+            <div class="dim-box">
+              <span class="dim-lbl">Optimized</span>
+              <b id="itemOptDim">–</b>
+            </div>
+          </div>
+          <div class="throughput-metric">
+            <span>Execution Duration: <b id="itemProcTime">–</b></span>
+            <span>Policy: <b id="itemPolicyNote">–</b></span>
+          </div>
+        </div>
+      </div>
+
       <div class="stats">
         <div class="stat"><span>Original size</span><b id="sOriginal">–</b></div>
         <div class="stat"><span>Optimized size</span><b id="sOptimized">–</b></div>
@@ -86,26 +145,138 @@
 
     <!-- 4. Optimization Dashboard (Feature 2) -->
     <section class="panel" id="dashPanel">
-      <h2>4 · Optimization dashboard <button id="refreshStatsBtn" class="btn small ghost">Refresh totals</button></h2>
-      <div class="muted">Cumulative media telemetry and cloud storage savings across all processed files.</div>
-      <div class="dash-grid" id="dashGrid">
-        <div class="dash-card"><span>Files processed</span><b id="dProcessed">0</b></div>
-        <div class="dash-card"><span>In progress</span><b id="dInProgress">0</b></div>
-        <div class="dash-card"><span>Failed</span><b id="dFailed">0</b></div>
-        <div class="dash-card"><span>Original total</span><b id="dOriginal">0 B</b></div>
-        <div class="dash-card"><span>Optimized total</span><b id="dOptimized">0 B</b></div>
-        <div class="dash-card good"><span>Total saved</span><b id="dSaved">0 B</b></div>
-        <div class="dash-card good"><span>Avg reduction</span><b id="dReduction">0.0%</b></div>
+      <div class="section-header">
+        <div>
+          <h2>4 · Optimization analytics dashboard</h2>
+          <div class="muted">Cumulative media telemetry, quality analytics, and storage reduction across all processed database records.</div>
+        </div>
+        <button id="refreshStatsBtn" class="btn small ghost">Refresh totals</button>
       </div>
+
+      <!-- KPI Summary Cards -->
+      <div class="dash-grid" id="dashGrid">
+        <div class="dash-card"><span>Total Uploaded</span><b id="dTotal">0</b></div>
+        <div class="dash-card"><span>Successfully Processed</span><b id="dProcessed">0</b></div>
+        <div class="dash-card"><span>In Progress</span><b id="dInProgress">0</b></div>
+        <div class="dash-card"><span>Failed</span><b id="dFailed">0</b></div>
+        <div class="dash-card"><span>Original Total</span><b id="dOriginal">0 B</b></div>
+        <div class="dash-card"><span>Optimized Total</span><b id="dOptimized">0 B</b></div>
+        <div class="dash-card good"><span>Total Storage Saved</span><b id="dSaved">0 B</b></div>
+        <div class="dash-card good"><span>Avg Reduction</span><b id="dReduction">0.0%</b></div>
+        <div class="dash-card"><span>Avg Image PSNR</span><b id="dAvgPsnr">–</b></div>
+        <div class="dash-card"><span>Avg Processing Time</span><b id="dAvgTime">–</b></div>
+      </div>
+
+      <!-- Batch Summary (when available) -->
       <div id="batchBox" class="hidden" style="margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px;">
         <h3 style="font-size: 15px; margin: 0 0 8px;">Last batch summary (<span id="batchCount">0</span> files)</h3>
         <div class="dash-grid" id="batchGrid"></div>
       </div>
+
+      <!-- Section 4 Professional Analytics Charts Grid -->
+      <div class="dash-charts-grid" id="dashChartsGrid">
+        <!-- Chart 1: Storage Breakdown -->
+        <div class="chart-card">
+          <div class="chart-title">Original vs. Optimized Storage</div>
+          <div class="chart-subtitle muted">Total storage footprint in Megabytes (MB)</div>
+          <div class="chart-canvas-wrap">
+            <canvas id="storageChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 2: Daily Activity -->
+        <div class="chart-card">
+          <div class="chart-title">Daily Processing Activity Timeline</div>
+          <div class="chart-subtitle muted">Uploaded files and successfully completed jobs over time</div>
+          <div class="chart-canvas-wrap">
+            <canvas id="dailyActivityChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 3: Media Type Distribution -->
+        <div class="chart-card">
+          <div class="chart-title">Images vs. Videos Distribution</div>
+          <div class="chart-subtitle muted">Workload proportion by media container</div>
+          <div class="chart-canvas-wrap">
+            <canvas id="typeDistChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 4: Output Format Distribution -->
+        <div class="chart-card">
+          <div class="chart-title">Intelligent Output Format Distribution</div>
+          <div class="chart-subtitle muted">Optimal formats chosen by policy engine (WebP, JPEG, MP4)</div>
+          <div class="chart-canvas-wrap">
+            <canvas id="formatDistChart"></canvas>
+          </div>
+        </div>
+
+        <!-- Chart 5: Quality & Compression Analytics -->
+        <div class="chart-card chart-card-wide">
+          <div class="chart-title">Image Quality Distribution (PSNR Tiers)</div>
+          <div class="chart-subtitle muted">Fidelity distribution across processed images based on ITU standards</div>
+          <div class="chart-canvas-wrap">
+            <canvas id="qualityDistChart"></canvas>
+          </div>
+        </div>
+      </div>
+      <div id="dashEmptyState" class="empty-state hidden">
+        <p>No media files processed yet in the database. Upload an image or video above to generate real-time analytics.</p>
+      </div>
     </section>
 
-    <!-- 5. Processed Media History -->
-    <section class="panel">
-      <h2>5 · Processed media history <button id="refreshHistoryBtn" class="btn small ghost">Refresh list</button></h2>
+    <!-- 5. Processed Media History & Management -->
+    <section class="panel" id="historyPanel">
+      <div class="section-header">
+        <div>
+          <h2>5 · Processed media history &amp; management</h2>
+          <div class="muted">Search, filter, inspect technical telemetry, and export processing history records.</div>
+        </div>
+        <div class="header-actions">
+          <button id="exportCsvBtn" class="btn small">Export CSV</button>
+          <button id="refreshHistoryBtn" class="btn small ghost">Refresh list</button>
+        </div>
+      </div>
+
+      <!-- Management Toolbar (Search, Filter, Sort) -->
+      <div class="table-toolbar">
+        <div class="search-box">
+          <input type="search" id="historySearch" placeholder="Search by filename or ID..." />
+        </div>
+        <div class="filter-group">
+          <label for="historyTypeFilter" class="toolbar-label">Type:</label>
+          <select id="historyTypeFilter">
+            <option value="all">All Types</option>
+            <option value="image">Images</option>
+            <option value="video">Videos</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label for="historyStatusFilter" class="toolbar-label">Status:</label>
+          <select id="historyStatusFilter">
+            <option value="all">All Statuses</option>
+            <option value="COMPLETED">Completed</option>
+            <option value="PROCESSING">Processing</option>
+            <option value="FAILED">Failed</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label for="historySort" class="toolbar-label">Sort by:</label>
+          <select id="historySort">
+            <option value="date_desc">Newest Uploaded</option>
+            <option value="date_asc">Oldest Uploaded</option>
+            <option value="size_desc">File Size (Largest)</option>
+            <option value="size_asc">File Size (Smallest)</option>
+            <option value="savings_desc">Highest Savings %</option>
+            <option value="time_asc">Fastest Processing</option>
+          </select>
+        </div>
+        <div class="toolbar-right">
+          <button id="loadSampleBtn" class="btn small ghost" title="Populate demo data for presentation">Load Demo Sample</button>
+        </div>
+      </div>
+
+      <!-- Media Management Table -->
       <div class="table-wrap">
         <table>
           <thead>
@@ -116,19 +287,54 @@
               <th>Status</th>
               <th>Original</th>
               <th>Optimized</th>
-              <th>Saved</th>
-              <th>Quality</th>
-              <th>Settings</th>
-              <th>Action</th>
+              <th>Savings</th>
+              <th>PSNR Quality</th>
+              <th>Output</th>
+              <th>Time</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="historyBody">
-            <tr><td colspan="10" class="muted" style="text-align: center; padding: 18px;">No media files uploaded yet. Choose an image or video above to begin.</td></tr>
+            <tr><td colspan="11" class="muted" style="text-align: center; padding: 18px;">No media files uploaded yet. Choose an image or video above to begin.</td></tr>
           </tbody>
         </table>
       </div>
+
+      <!-- Pagination Controls -->
+      <div class="pagination-bar">
+        <div class="page-size-selector">
+          <label for="pageSizeSelect">Show:</label>
+          <select id="pageSizeSelect">
+            <option value="5">5</option>
+            <option value="10" selected>10</option>
+            <option value="25">25</option>
+          </select>
+          <span id="historyItemCount" class="muted" style="margin-left: 8px;">0 items</span>
+        </div>
+        <div class="pagination-buttons">
+          <button id="prevPageBtn" class="btn small ghost" disabled>&larr; Prev</button>
+          <span id="pageIndicator" style="font-size: 13px; font-weight: 500;">Page 1 of 1</span>
+          <button id="nextPageBtn" class="btn small ghost" disabled>Next &rarr;</button>
+        </div>
+      </div>
     </section>
   </main>
+
+  <!-- Detailed Report Modal -->
+  <div id="detailModal" class="modal-backdrop hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="modalTitle">Media Processing Report</h3>
+        <button id="closeModalBtn" class="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <!-- Populated dynamically by app.js -->
+      </div>
+      <div class="modal-footer">
+        <button id="modalCloseBtn" class="btn ghost small">Close</button>
+      </div>
+    </div>
+  </div>
 
   <footer>AWS Serverless Media Transcoder and Thumbnail Pipeline · College Capstone Demonstration</footer>
   <script src="app.js"></script>

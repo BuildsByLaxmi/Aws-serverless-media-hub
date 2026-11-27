@@ -50,11 +50,16 @@ class SupabaseStore:
 
     def stats_rows(self, limit=10000):
         try:
-            r = self.c.table(TABLE).select("status,original_size,optimized_size,compression_percentage").limit(limit).execute()
+            r = self.c.table(TABLE).select("status,original_size,optimized_size,compression_percentage,psnr_db,processing_time,media_type,settings_used,created_at").limit(limit).execute()
             return r.data or []
-        except Exception as e:
-            print(f"stats_rows query error: {e}", flush=True)
-            return []
+        except Exception:
+            # Fallback if optional columns from 0002_features are not in the table
+            try:
+                r = self.c.table(TABLE).select("status,original_size,optimized_size,compression_percentage").limit(limit).execute()
+                return r.data or []
+            except Exception as e2:
+                print(f"stats_rows query error: {e2}", flush=True)
+                return []
 
     def get_many(self, ids):
         if not ids:
