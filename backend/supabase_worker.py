@@ -79,8 +79,11 @@ def run_loop(store, once=False, interval=3):
 
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
     from supabase_config import get_client
     from supabase_store import SupabaseStore
     run_loop(SupabaseStore(get_client()), once="--once" in sys.argv)

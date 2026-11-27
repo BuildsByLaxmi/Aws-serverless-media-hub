@@ -111,16 +111,23 @@ def create_app(store, process_fn=None):
     return app
 
 
+def _load_env():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:      # python-dotenv is optional when variables are already exported
+        pass
+
+
 def _default_app():
-    from dotenv import load_dotenv
-    load_dotenv()
+    _load_env()
     from supabase_config import get_client
     from supabase_store import SupabaseStore
     from supabase_worker import process_media
     return create_app(SupabaseStore(get_client()), process_media)
 
 
-try:
-    app = _default_app() if os.environ.get("SUPABASE_URL") or os.path.exists(".env") or os.path.exists("backend/.env") else None
-except Exception:      # missing credentials: importing the module for tests must not crash
-    app = None
+# Importing this module without credentials (e.g. in unit tests) must not crash, but a misconfigured
+# server must fail loudly: `uvicorn supabase_api:app` will raise the clear error from get_client().
+_load_env()
+app = _default_app() if os.environ.get("SUPABASE_URL") else None
