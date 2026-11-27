@@ -13,7 +13,7 @@ import os
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 MAX_DIMENSION = int(os.environ.get("MAX_DIMENSION", "1920"))   # longest side of optimized image
-WEBP_QUALITY = int(os.environ.get("WEBP_QUALITY", "80"))
+WEBP_QUALITY = int(os.environ.get("WEBP_QUALITY", "82"))
 THUMBNAIL_SIZE = (200, 200)
 
 
