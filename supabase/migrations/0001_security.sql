@@ -7,6 +7,10 @@ alter table public.media_metadata enable row level security;
 -- Explicit deny-by-default: no policies for anon/authenticated means no rows are visible.
 revoke all on public.media_metadata from anon, authenticated;
 
+-- The backend uses service_role: newer Supabase projects do not auto-grant table privileges, so grant explicitly.
+grant usage on schema public to service_role;
+grant select, insert, update, delete on public.media_metadata to service_role;
+
 -- Keep updated_at honest even for manual edits.
 create or replace function public.touch_updated_at() returns trigger language plpgsql as $$
 begin new.updated_at = now(); return new; end $$;
